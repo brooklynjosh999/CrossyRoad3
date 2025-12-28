@@ -1,5 +1,6 @@
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.159.0/build/three.module.js';
+
 const canvas = document.getElementById('gameCanvas');
-const ctx = canvas.getContext('2d');
 const overlay = document.getElementById('overlay');
 const overlayTitle = document.getElementById('overlayTitle');
 const overlayKicker = document.getElementById('overlayKicker');
@@ -10,113 +11,259 @@ const scoreValue = document.getElementById('scoreValue');
 const bestValue = document.getElementById('bestValue');
 const coinValue = document.getElementById('coinValue');
 
-const tileSize = 40;
-const cols = Math.floor(canvas.width / tileSize);
-const rows = Math.floor(canvas.height / tileSize);
+const tile = 6;
+const cols = 11;
+const lanesVisible = 15;
+const halfWidth = (cols * tile) / 2;
 
-const randomBetween = (min, max) => Math.random() * (max - min) + min;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87c7ff);
+
+const camera = new THREE.PerspectiveCamera(48, canvas.width / canvas.height, 0.1, 500);
+camera.position.set(0, 60, 64);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(canvas.width, canvas.height, false);
+renderer.shadowMap.enabled = true;
+
+const ambient = new THREE.AmbientLight(0xffffff, 0.65);
+scene.add(ambient);
+const sun = new THREE.DirectionalLight(0xffffff, 0.75);
+sun.position.set(40, 80, 30);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+scene.add(sun);
+
+const laneGroup = new THREE.Group();
+scene.add(laneGroup);
+
+const vehicleGroup = new THREE.Group();
+scene.add(vehicleGroup);
+
+const logGroup = new THREE.Group();
+scene.add(logGroup);
+
+const coinGroup = new THREE.Group();
+scene.add(coinGroup);
 
 const colors = {
-  road: ['#2f323b', '#262932'],
-  laneStripe: '#4f5464',
-  grass: '#75d83a',
-  riverTop: '#58c9ff',
-  riverBottom: '#2e7bc5',
-  log: '#b87942',
-  car: ['#f5425d', '#3ecfff', '#ffd166', '#7c3aed'],
-  player: '#ffffff',
-  playerDetail: '#ff3b30',
-  coin: '#ffd166',
-  coinEdge: '#f59e0b',
-  textShadow: 'rgba(0,0,0,0.4)',
+  grass: 0x7bcf3a,
+  road: 0x2f323b,
+  roadStripe: 0xdadada,
+  river: 0x3095ff,
+  start: 0x9be579,
+  goal: 0xf2f5f7,
+  car: [0xf5425d, 0x3ecfff, 0xffd166, 0x9b6bff],
+  log: 0xa5673b,
+  coin: 0xffd166,
+  coinEdge: 0xf59e0b,
+  player: 0xffffff,
+  beak: 0xff3b30,
 };
-
-const player = {
-  px: (Math.floor(cols / 2) + 0.5) * tileSize,
-  py: (rows - 1 + 0.5) * tileSize,
-  size: tileSize * 0.6,
-  maxRow: rows - 1,
-  coins: 0,
-};
-
-let gameState = 'idle'; // idle, running, over
-let level = 1;
-let score = 0;
-let best = 0;
 
 let lanes = [];
+let spawnTimers = [];
 let vehicles = [];
 let logs = [];
 let coins = [];
-let spawnTimers = [];
-let lastTimestamp = 0;
+let level = 1;
+let score = 0;
+let best = 0;
+let lastTime = 0;
+let gameState = 'idle'; // idle | running | over
 
-function resetPlayer() {
-  player.px = (Math.floor(cols / 2) + 0.5) * tileSize;
-  player.py = (rows - 1 + 0.5) * tileSize;
-  player.maxRow = rows - 1;
+const player = createPlayer();
+resetPlayerPosition();
+scene.add(player.mesh);
+
+const laneTemplates = () => [
+  { type: 'goal' },
+  { type: 'river', direction: 1, speed: 1.25 },
+  { type: 'river', direction: -1, speed: 1.45 },
+  { type: 'grass' },
+  { type: 'road', direction: 1, speed: 2.5 },
+  { type: 'road', direction: -1, speed: 2.2 },
+  { type: 'road', direction: 1, speed: 2.8 },
+  { type: 'grass' },
+  { type: 'river', direction: -1, speed: 1.7 },
+  { type: 'road', direction: -1, speed: 2.9 },
+  { type: 'grass' },
+  { type: 'road', direction: 1, speed: 2.1 },
+  { type: 'grass' },
+  { type: 'road', direction: -1, speed: 2.4 },
+  { type: 'start' },
+];
+
+function resetPlayerPosition() {
+  player.col = Math.floor(cols / 2);
+  player.lane = laneTemplates().length - 1;
+  player.maxProgress = player.lane;
+  player.worldX = toWorldX(player.col);
+  player.worldZ = toWorldZ(player.lane);
+  player.mesh.position.set(player.worldX, player.height / 2, player.worldZ);
+}
+
+function createPlayer() {
+  const bodyGeo = new THREE.BoxGeometry(tile * 0.6, tile * 0.9, tile * 0.6);
+  const bodyMat = new THREE.MeshStandardMaterial({ color: colors.player });
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  body.castShadow = true;
+  body.position.y = (tile * 0.9) / 2;
+
+  const beakGeo = new THREE.BoxGeometry(tile * 0.2, tile * 0.2, tile * 0.4);
+  const beakMat = new THREE.MeshStandardMaterial({ color: colors.beak });
+  const beak = new THREE.Mesh(beakGeo, beakMat);
+  beak.position.set(0, body.position.y, bodyGeo.parameters.depth / 2 + beakGeo.parameters.depth / 2);
+  beak.castShadow = true;
+
+  const group = new THREE.Group();
+  group.add(body);
+  group.add(beak);
+
+  return {
+    mesh: group,
+    col: 0,
+    lane: 0,
+    maxProgress: 0,
+    height: tile * 0.9,
+    radius: tile * 0.35,
+    coins: 0,
+    worldX: 0,
+    worldZ: 0,
+  };
+}
+
+function toWorldX(col) {
+  return (col - (cols / 2 - 0.5)) * tile;
+}
+
+function toWorldZ(laneIndex) {
+  return (laneTemplates().length - 1 - laneIndex) * tile;
+}
+
+function randomBetween(min, max) {
+  return Math.random() * (max - min) + min;
 }
 
 function buildLanes() {
-  const speedBoost = 1 + (level - 1) * 0.12;
-  lanes = [
-    { type: 'goal' },
-    { type: 'river', direction: 1, speed: 1.2 * speedBoost },
-    { type: 'river', direction: -1, speed: 1.35 * speedBoost },
-    { type: 'grass' },
-    { type: 'road', direction: 1, speed: 2.6 * speedBoost },
-    { type: 'road', direction: -1, speed: 2.3 * speedBoost },
-    { type: 'road', direction: 1, speed: 3 * speedBoost },
-    { type: 'grass' },
-    { type: 'river', direction: -1, speed: 1.65 * speedBoost },
-    { type: 'road', direction: -1, speed: 2.9 * speedBoost },
-    { type: 'grass' },
-    { type: 'road', direction: 1, speed: 2.2 * speedBoost },
-    { type: 'grass' },
-    { type: 'road', direction: -1, speed: 2.5 * speedBoost },
-    { type: 'start' },
-  ];
+  laneGroup.clear();
+  lanes = laneTemplates().map((lane) => {
+    const speedBoost = 1 + (level - 1) * 0.14;
+    const data = { ...lane };
+    if (data.speed) data.speed *= speedBoost;
+    return data;
+  });
 
+  lanes.forEach((lane, idx) => {
+    const isRoad = lane.type === 'road';
+    const isRiver = lane.type === 'river';
+    const baseColor =
+      lane.type === 'start'
+        ? colors.start
+        : lane.type === 'goal'
+        ? colors.goal
+        : lane.type === 'grass'
+        ? colors.grass
+        : isRoad
+        ? colors.road
+        : colors.river;
+
+    const geo = new THREE.BoxGeometry(cols * tile + tile, tile * 0.25, tile);
+    const mat = new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.9, metalness: 0.05 });
+    const base = new THREE.Mesh(geo, mat);
+    base.receiveShadow = true;
+    base.position.set(0, -geo.parameters.height / 2, toWorldZ(idx));
+    laneGroup.add(base);
+
+    if (isRoad) {
+      const stripeGeo = new THREE.BoxGeometry(cols * tile + tile, 0.05, 0.4);
+      const stripeMat = new THREE.MeshStandardMaterial({ color: colors.roadStripe });
+      const stripe = new THREE.Mesh(stripeGeo, stripeMat);
+      stripe.position.set(0, 0, base.position.z);
+      laneGroup.add(stripe);
+    }
+
+    if (lane.type === 'goal') {
+      const textGeo = new THREE.BoxGeometry(cols * tile + tile, 0.02, 0.2);
+      const textMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
+      const stripe = new THREE.Mesh(textGeo, textMat);
+      stripe.position.set(0, 0, base.position.z);
+      laneGroup.add(stripe);
+    }
+  });
+
+  spawnTimers = lanes.map(() => randomBetween(0.4, 1.3));
   vehicles = [];
   logs = [];
   coins = [];
-  spawnTimers = lanes.map(() => randomBetween(0.4, 1.4));
+  vehicleGroup.clear();
+  logGroup.clear();
+  coinGroup.clear();
+  spawnCoins();
 }
 
-function regenerateCoins() {
+function spawnCoins() {
+  coinGroup.clear();
   coins = [];
   lanes.forEach((lane, idx) => {
     if (lane.type === 'grass' || lane.type === 'start') {
-      const numberHere = Math.random() < 0.6 ? 1 : 0;
-      for (let i = 0; i < numberHere; i += 1) {
-        coins.push({
-          x: Math.floor(randomBetween(1, cols - 1)),
-          y: idx,
-          radius: tileSize * 0.25,
-        });
+      if (Math.random() < 0.6) {
+        const col = Math.floor(randomBetween(1, cols - 1));
+        const coin = createCoin(col, idx);
+        coins.push(coin);
+        coinGroup.add(coin.mesh);
       }
     }
   });
 }
 
+function createCoin(col, lane) {
+  const geo = new THREE.CylinderGeometry(tile * 0.22, tile * 0.22, tile * 0.1, 20);
+  const mat = new THREE.MeshStandardMaterial({ color: colors.coin, emissive: 0xffb703, emissiveIntensity: 0.2 });
+  const mesh = new THREE.Mesh(geo, mat);
+  const edgeMat = new THREE.MeshStandardMaterial({ color: colors.coinEdge });
+  const edge = new THREE.Mesh(new THREE.TorusGeometry(tile * 0.22, tile * 0.05, 8, 20), edgeMat);
+  mesh.add(edge);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+
+  mesh.position.set(toWorldX(col), geo.parameters.height / 2, toWorldZ(lane));
+  return { col, lane, mesh };
+}
+
 function spawnEntityForLane(laneIndex) {
   const lane = lanes[laneIndex];
+  if (!lane) return;
   if (lane.type === 'road') {
-    const width = tileSize * randomBetween(1.4, 1.9);
-    const speed = lane.speed;
-    const direction = lane.direction;
-    const y = laneIndex * tileSize;
-    const x = direction > 0 ? -width : canvas.width + width;
-    vehicles.push({ x, y, width, height: tileSize * 0.8, speed, direction, laneIndex });
+    const length = tile * randomBetween(1.4, 2.2);
+    const height = tile * 0.7;
+    const geo = new THREE.BoxGeometry(length, height, tile * 0.8);
+    const mat = new THREE.MeshStandardMaterial({ color: colors.car[laneIndex % colors.car.length], metalness: 0.05 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    const dir = lane.direction;
+    const xStart = dir > 0 ? -halfWidth - length : halfWidth + length;
+    const zPos = toWorldZ(laneIndex);
+    mesh.position.set(xStart, height / 2, zPos);
+    vehicleGroup.add(mesh);
+    vehicles.push({ mesh, dir, speed: lane.speed, length, laneIndex });
   }
 
   if (lane.type === 'river') {
-    const width = tileSize * randomBetween(2.5, 3.5);
-    const speed = lane.speed;
-    const direction = lane.direction;
-    const y = laneIndex * tileSize;
-    const x = direction > 0 ? -width : canvas.width + width;
-    logs.push({ x, y, width, height: tileSize * 0.75, speed, direction, laneIndex });
+    const length = tile * randomBetween(2.6, 3.8);
+    const height = tile * 0.5;
+    const geo = new THREE.BoxGeometry(length, height, tile * 0.7);
+    const mat = new THREE.MeshStandardMaterial({ color: colors.log, roughness: 1 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = true;
+    const dir = lane.direction;
+    const xStart = dir > 0 ? -halfWidth - length : halfWidth + length;
+    const zPos = toWorldZ(laneIndex);
+    mesh.position.set(xStart, height / 2, zPos);
+    logGroup.add(mesh);
+    logs.push({ mesh, dir, speed: lane.speed, length, laneIndex });
   }
 }
 
@@ -124,8 +271,8 @@ function handleSpawning(dt) {
   lanes.forEach((lane, idx) => {
     if (lane.type === 'road' || lane.type === 'river') {
       spawnTimers[idx] -= dt;
-      const minInterval = lane.type === 'road' ? 0.9 : 1.4;
-      const maxInterval = lane.type === 'road' ? 1.7 : 2.3;
+      const minInterval = lane.type === 'road' ? 0.9 : 1.6;
+      const maxInterval = lane.type === 'road' ? 1.7 : 2.5;
       if (spawnTimers[idx] <= 0) {
         spawnEntityForLane(idx);
         spawnTimers[idx] = randomBetween(minInterval, maxInterval);
@@ -135,64 +282,55 @@ function handleSpawning(dt) {
 }
 
 function updateEntities(dt) {
-  const allVehicles = [];
+  const activeVehicles = [];
   vehicles.forEach((vehicle) => {
-    const dx = vehicle.speed * vehicle.direction * dt * tileSize;
-    vehicle.x += dx;
-    if (vehicle.x + vehicle.width > 0 && vehicle.x < canvas.width + vehicle.width) {
-      allVehicles.push(vehicle);
+    vehicle.mesh.position.x += vehicle.speed * vehicle.dir * dt * tile;
+    if (Math.abs(vehicle.mesh.position.x) < halfWidth + vehicle.length * 2) {
+      activeVehicles.push(vehicle);
+    } else {
+      vehicleGroup.remove(vehicle.mesh);
     }
   });
-  vehicles = allVehicles;
+  vehicles = activeVehicles;
 
-  const allLogs = [];
+  const activeLogs = [];
   logs.forEach((log) => {
-    const dx = log.speed * log.direction * dt * tileSize;
-    log.x += dx;
-    if (log.x + log.width > -tileSize * 2 && log.x < canvas.width + tileSize * 2) {
-      allLogs.push(log);
+    log.mesh.position.x += log.speed * log.dir * dt * tile;
+    if (Math.abs(log.mesh.position.x) < halfWidth + log.length * 2) {
+      activeLogs.push(log);
+    } else {
+      logGroup.remove(log.mesh);
     }
   });
-  logs = allLogs;
+  logs = activeLogs;
 }
 
-function movePlayer(dx, dy) {
+function movePlayer(dx, dz) {
   if (gameState !== 'running') return;
-  const targetGridX = clamp(Math.floor(player.px / tileSize) + dx, 0, cols - 1);
-  const targetGridY = clamp(Math.floor(player.py / tileSize) + dy, 0, rows - 1);
-  player.px = (targetGridX + 0.5) * tileSize;
-  player.py = (targetGridY + 0.5) * tileSize;
+  const targetCol = THREE.MathUtils.clamp(player.col + dx, 0, cols - 1);
+  const targetLane = THREE.MathUtils.clamp(player.lane + dz, 0, lanes.length - 1);
+  player.col = targetCol;
+  player.lane = targetLane;
+  player.worldX = toWorldX(player.col);
+  player.worldZ = toWorldZ(player.lane);
+  player.mesh.position.set(player.worldX, player.height / 2, player.worldZ);
 
-  if (targetGridY < player.maxRow) {
-    player.maxRow = targetGridY;
+  if (targetLane < player.maxProgress) {
+    player.maxProgress = targetLane;
     score += 10;
     updateScoreboard();
   }
 }
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function circleRectCollision(circleX, circleY, radius, rect) {
-  const closestX = clamp(circleX, rect.x, rect.x + rect.width);
-  const closestY = clamp(circleY, rect.y, rect.y + rect.height);
-  const dx = circleX - closestX;
-  const dy = circleY - closestY;
-  return dx * dx + dy * dy < radius * radius;
-}
-
 function detectCollisions(dt) {
-  const gridX = Math.floor(player.px / tileSize);
-  const gridY = Math.floor(player.py / tileSize);
-  const lane = lanes[gridY];
-
+  const lane = lanes[player.lane];
   if (!lane) return;
 
   if (lane.type === 'road') {
-    const hit = vehicles.some(
-      (v) => v.laneIndex === gridY && circleRectCollision(player.px, player.py, player.size * 0.5, v),
-    );
+    const hit = vehicles.some((vehicle) => {
+      if (vehicle.laneIndex !== player.lane) return false;
+      return boxAndSphereIntersect(vehicle.mesh, player.radius);
+    });
     if (hit) {
       endRun('Splatted by traffic!');
       return;
@@ -200,34 +338,38 @@ function detectCollisions(dt) {
   }
 
   if (lane.type === 'river') {
-    let standingOnLog = null;
+    let onLog = null;
     logs.forEach((log) => {
-      if (log.laneIndex === gridY && player.px > log.x && player.px < log.x + log.width) {
-        standingOnLog = log;
+      if (log.laneIndex !== player.lane) return;
+      if (boxAndSphereIntersect(log.mesh, player.radius)) {
+        onLog = log;
       }
     });
-    if (!standingOnLog) {
-      endRun('You fell into the river!');
+    if (!onLog) {
+      endRun('You fell into the water!');
       return;
     }
-    player.px += standingOnLog.speed * standingOnLog.direction * dt * tileSize;
-    if (player.px < tileSize * 0.4 || player.px > canvas.width - tileSize * 0.4) {
+    player.worldX += onLog.speed * onLog.dir * dt * tile;
+    if (Math.abs(player.worldX) > halfWidth + tile * 0.3) {
       endRun('Drifted off the log!');
       return;
     }
+    player.col = Math.round(player.worldX / tile + cols / 2 - 0.5);
+    player.col = THREE.MathUtils.clamp(player.col, 0, cols - 1);
+    player.mesh.position.x = player.worldX;
   }
 
   if (lane.type === 'goal') {
-    score += 100;
+    score += 120;
     level += 1;
     buildLanes();
-    regenerateCoins();
-    resetPlayer();
+    spawnCoins();
+    resetPlayerPosition();
     updateScoreboard();
-    flashOverlay('Level up!', 'Speed increases — stay sharp.', [
-      'Traffic moves faster.',
+    flashOverlay('Level up!', 'World speeds up—watch traffic.', [
+      'Cars drive faster.',
       'Logs drift quicker.',
-      'Coins respawn on safe tiles.',
+      'Coins respawn on grass and start.',
     ]);
     hideOverlayAfterDelay(1400);
     return;
@@ -235,22 +377,24 @@ function detectCollisions(dt) {
 
   const remainingCoins = [];
   coins.forEach((coin) => {
-    const coinWorld = { x: (coin.x + 0.5) * tileSize, y: (coin.y + 0.5) * tileSize };
-    const hitCoin = circleRectCollision(player.px, player.py, player.size * 0.45, {
-      x: coinWorld.x - coin.radius,
-      y: coinWorld.y - coin.radius,
-      width: coin.radius * 2,
-      height: coin.radius * 2,
-    });
-    if (hitCoin) {
+    const distance = player.mesh.position.distanceTo(coin.mesh.position);
+    if (distance < tile * 0.6) {
       score += 15;
       player.coins += 1;
+      coinGroup.remove(coin.mesh);
       updateScoreboard();
     } else {
       remainingCoins.push(coin);
     }
   });
   coins = remainingCoins;
+}
+
+function boxAndSphereIntersect(boxMesh, radius) {
+  const box = new THREE.Box3().setFromObject(boxMesh);
+  const closestPoint = box.clampPoint(player.mesh.position, new THREE.Vector3());
+  const distanceSq = closestPoint.distanceToSquared(player.mesh.position);
+  return distanceSq < radius * radius;
 }
 
 function endRun(reason) {
@@ -284,127 +428,16 @@ function updateScoreboard() {
   coinValue.textContent = player.coins.toString();
 }
 
-function drawBackground() {
-  lanes.forEach((lane, idx) => {
-    const y = idx * tileSize;
-    if (lane.type === 'road') {
-      const gradient = ctx.createLinearGradient(0, y, 0, y + tileSize);
-      gradient.addColorStop(0, colors.road[0]);
-      gradient.addColorStop(1, colors.road[1]);
-      ctx.fillStyle = gradient;
-      ctx.fillRect(0, y, canvas.width, tileSize);
-
-      ctx.strokeStyle = colors.laneStripe;
-      ctx.lineWidth = 2;
-      ctx.setLineDash([12, 12]);
-      ctx.beginPath();
-      ctx.moveTo(0, y + tileSize / 2);
-      ctx.lineTo(canvas.width, y + tileSize / 2);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    } else if (lane.type === 'river') {
-      const gradient = ctx.createLinearGradient(0, y, 0, y + tileSize);
-      gradient.addColorStop(0, colors.riverTop);
-      gradient.addColorStop(1, colors.riverBottom);
-      ctx.fillStyle = gradient;
-      ctx.fillRect(0, y, canvas.width, tileSize);
-    } else {
-      ctx.fillStyle = colors.grass;
-      ctx.fillRect(0, y, canvas.width, tileSize);
-    }
-  });
-}
-
-function drawVehicles() {
-  vehicles.forEach((vehicle) => {
-    ctx.fillStyle = colors.car[vehicle.laneIndex % colors.car.length];
-    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.roundRect(vehicle.x, vehicle.y + tileSize * 0.1, vehicle.width, vehicle.height, 8);
-    ctx.fill();
-    ctx.stroke();
-  });
-}
-
-function drawLogs() {
-  logs.forEach((log) => {
-    ctx.fillStyle = colors.log;
-    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.roundRect(log.x, log.y + tileSize * 0.15, log.width, log.height, 6);
-    ctx.fill();
-    ctx.stroke();
-  });
-}
-
-function drawCoins() {
-  coins.forEach((coin) => {
-    const x = (coin.x + 0.5) * tileSize;
-    const y = (coin.y + 0.5) * tileSize;
-    const r = coin.radius;
-    ctx.beginPath();
-    ctx.fillStyle = colors.coin;
-    ctx.strokeStyle = colors.coinEdge;
-    ctx.lineWidth = 3;
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    ctx.font = 'bold 10px "Press Start 2P", monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('C', x, y + 3);
-  });
-}
-
-function drawPlayer() {
-  const width = player.size;
-  const height = player.size * 1.1;
-  const x = player.px - width / 2;
-  const y = player.py - height / 2;
-
-  ctx.fillStyle = colors.player;
-  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.roundRect(x, y, width, height, 6);
-  ctx.fill();
-  ctx.stroke();
-
-  ctx.fillStyle = colors.playerDetail;
-  ctx.fillRect(x + width * 0.35, y - height * 0.05, width * 0.3, height * 0.3);
-}
-
-function drawHUD() {
-  ctx.save();
-  ctx.fillStyle = colors.textShadow;
-  ctx.font = 'bold 16px "Press Start 2P", monospace';
-  ctx.textAlign = 'left';
-  ctx.fillText(`Level ${level}`, 18, 24);
-  ctx.textAlign = 'right';
-  ctx.fillText(`Row ${Math.max(0, rows - Math.floor(player.py / tileSize) - 1)}`, canvas.width - 18, 24);
-  ctx.restore();
-}
-
-function draw() {
-  drawBackground();
-  drawLogs();
-  drawVehicles();
-  drawCoins();
-  drawPlayer();
-  drawHUD();
-}
-
 function tick(timestamp) {
-  const dt = Math.min((timestamp - lastTimestamp) / 1000, 0.05);
-  lastTimestamp = timestamp;
+  const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+  lastTime = timestamp;
   if (gameState === 'running') {
     handleSpawning(dt);
     updateEntities(dt);
     detectCollisions(dt);
+    player.mesh.rotation.y = Math.sin(timestamp * 0.001) * 0.08;
   }
-  draw();
+  renderer.render(scene, camera);
   requestAnimationFrame(tick);
 }
 
@@ -412,9 +445,9 @@ function startRun() {
   score = 0;
   player.coins = 0;
   level = 1;
-  resetPlayer();
+  resetPlayerPosition();
   buildLanes();
-  regenerateCoins();
+  spawnCoins();
   updateScoreboard();
   gameState = 'running';
   overlay.classList.add('hidden');
@@ -425,9 +458,9 @@ function resetBest() {
   score = 0;
   player.coins = 0;
   level = 1;
-  resetPlayer();
+  resetPlayerPosition();
   buildLanes();
-  regenerateCoins();
+  spawnCoins();
   updateScoreboard();
 }
 
@@ -466,10 +499,10 @@ resetButton.addEventListener('click', () => {
 });
 
 buildLanes();
-regenerateCoins();
+spawnCoins();
 updateScoreboard();
 handleKeys();
 requestAnimationFrame((ts) => {
-  lastTimestamp = ts;
+  lastTime = ts;
   requestAnimationFrame(tick);
 });
