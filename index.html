@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crossy Road Clone</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="top-bar">
+      <div class="logo-lockup">
+        <span class="logo-title">Crossy Road</span>
+        <span class="logo-subtitle">Blocky web mini-game</span>
+      </div>
+      <div class="hud">
+        <div class="hud-item">
+          <span class="label">Score</span>
+          <span id="scoreValue" class="value">0</span>
+        </div>
+        <div class="hud-item">
+          <span class="label">Best</span>
+          <span id="bestValue" class="value">0</span>
+        </div>
+        <div class="hud-item">
+          <span class="label">Coins</span>
+          <span id="coinValue" class="value">0</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="content">
+      <section class="game-shell">
+        <div class="game-card">
+          <div id="overlay" class="overlay">
+            <div class="overlay-card">
+              <p id="overlayKicker" class="overlay-kicker">Hop across highways and rivers.</p>
+              <h1 id="overlayTitle">Clone Crossy Road in the browser.</h1>
+              <ul id="overlayList">
+                <li>Use <strong>WASD</strong> or <strong>Arrow keys</strong> to move.</li>
+                <li>Avoid cars, stay on logs, and collect coins.</li>
+                <li>Reach the far side to level up and speed things up.</li>
+              </ul>
+              <div class="overlay-actions">
+                <button id="startButton" class="primary">Start run</button>
+                <button id="resetButton" class="ghost">Reset score</button>
+              </div>
+            </div>
+          </div>
+          <canvas id="gameCanvas" width="960" height="600" aria-label="Crossy Road canvas game"></canvas>
+        </div>
+        <aside class="panel">
+          <h2>How to play</h2>
+          <ol>
+            <li>Dodge traffic on the road lanes.</li>
+            <li>Hop onto moving logs to cross the river.</li>
+            <li>Grab coins to boost your score.</li>
+            <li>Reach the grassy goal at the top to level up.</li>
+          </ol>
+          <div class="pill">Fast-paced. No downloads.</div>
+          <div class="pill">Keyboard friendly.</div>
+          <div class="pill pill-accent">Endless levels.</div>
+        </aside>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
